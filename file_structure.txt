@@ -1,0 +1,11 @@
+clock-display/
+├── clock.cc               # Your main program
+├── Makefile
+├── fonts/                 # BDF font files
+│   ├── 6x12.bdf
+│   └── 12x24.bdf
+├── icons/                 # PNG weather icons (e.g. sun.png, cloud.png)
+├── lodepng/               # PNG decoder
+│   ├── lodepng.h
+│   └── lodepng.cpp
+└── ../rpi-rgb-led-matrix/ # Cloned matrix library
