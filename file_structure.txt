@@ -1,5 +1,5 @@
 clock-display/
-├── clock.cc               # Your main program
+├── clock.cc               # Main program
 ├── Makefile
 ├── fonts/                 # BDF font files
 │   ├── 6x12.bdf
