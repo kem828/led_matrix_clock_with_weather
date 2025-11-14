@@ -10,6 +10,7 @@
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
+#include <cmath>
 #include "lodepng.h"
 // g++ -o clock clock.cc -I../include -L../lib -lrgbmatrix -lcurl
 
@@ -24,6 +25,8 @@ const int LEFT_PANEL_WIDTH = 64;
 const int RIGHT_PANEL_X = 64;
 const int TOTAL_WIDTH = 128;
 const int ICON_SIZE = 32;
+
+
 
 struct Pixel {
     uint8_t r, g, b;
@@ -40,12 +43,17 @@ Pixel partlyCloudyIcon[ICON_SIZE][ICON_SIZE];
 Pixel drizzleIcon[ICON_SIZE][ICON_SIZE];
 Pixel thunderIcon[ICON_SIZE][ICON_SIZE];
 Pixel friendIcon[ICON_SIZE][ICON_SIZE];
+Pixel hazeIcon[ICON_SIZE][ICON_SIZE];
+Pixel ashIcon[ICON_SIZE][ICON_SIZE];
+Pixel smokeIcon[ICON_SIZE][ICON_SIZE];
+
 
 // --- Weather Fetch Helpers ---
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     ((std::string*)userp)->append((char*)contents, size * nmemb);
     return size * nmemb;
 }
+
 
 std::string GetWeather(const std::string& lat, const std::string& lon,
                        const std::string& api_key, Units units) {
@@ -107,6 +115,7 @@ WeatherData ParseWeather(const std::string& jsonStr, Units units) {
 
 
 bool LoadIconFromPNG(const std::string& filename, Pixel icon[ICON_SIZE][ICON_SIZE]) {
+
     std::vector<unsigned char> image; // raw RGBA pixels
     unsigned width, height;
 
@@ -237,6 +246,11 @@ void PreRenderFog() {
 
 // --- Blit function ---
 void DrawIcon(rgb_matrix::FrameCanvas* canvas, int x, int y, Pixel icon[ICON_SIZE][ICON_SIZE]) {
+    if (!canvas) {
+        std::cerr << "Canvas is null\n";
+        return;
+    }
+
     for (int row = 0; row < ICON_SIZE; row++) {
         for (int col = 0; col < ICON_SIZE; col++) {
             Pixel p = icon[row][col];
@@ -246,6 +260,7 @@ void DrawIcon(rgb_matrix::FrameCanvas* canvas, int x, int y, Pixel icon[ICON_SIZ
         }
     }
 }
+
 
 void DrawBorder(rgb_matrix::FrameCanvas* canvas, Color color) {
     int width = canvas->width();
@@ -257,10 +272,138 @@ void DrawBorder(rgb_matrix::FrameCanvas* canvas, Color color) {
     }
 
     for (int y = 0; y < height; ++y) {
+    for (int y = 0; y < height; ++y) {
         canvas->SetPixel(0, y, color.r, color.g, color.b);             // left
         canvas->SetPixel(width - 1, y, color.r, color.g, color.b);     // right
     }
 }
+}
+void DrawTextOutline(rgb_matrix::FrameCanvas* canvas, const rgb_matrix::Font& font, int x, int y,
+                     const rgb_matrix::Color& outline_color, const rgb_matrix::Color& text_color,
+                     const char* text) {
+    // Draw the outline by shifting the text in all 8 directions
+    rgb_matrix::DrawText(canvas, font, x - 1, y, outline_color, nullptr, text);
+    rgb_matrix::DrawText(canvas, font, x + 1, y, outline_color, nullptr, text);
+    rgb_matrix::DrawText(canvas, font, x, y - 1, outline_color, nullptr, text);
+    rgb_matrix::DrawText(canvas, font, x, y + 1, outline_color, nullptr, text);
+    rgb_matrix::DrawText(canvas, font, x - 1, y - 1, outline_color, nullptr, text);
+    rgb_matrix::DrawText(canvas, font, x + 1, y + 1, outline_color, nullptr, text);
+    rgb_matrix::DrawText(canvas, font, x - 1, y + 1, outline_color, nullptr, text);
+    rgb_matrix::DrawText(canvas, font, x + 1, y - 1, outline_color, nullptr, text);
+
+    // Draw the main text on top
+    rgb_matrix::DrawText(canvas, font, x, y, text_color, nullptr, text);
+}
+
+int MeasureTextWidth(const rgb_matrix::Font& font, const std::string& text) {
+    int width = 0;
+    for (char c : text) {
+        width += font.CharacterWidth(c);
+    }
+    return width;
+}
+
+
+void DrawFilledRoundedBox(rgb_matrix::FrameCanvas* canvas,
+                          int x, int y, int w, int h,
+                          const rgb_matrix::Color& fill,
+                          const rgb_matrix::Color& border,
+                          bool rounded = true) {
+    for (int dy = 0; dy < h; ++dy) {
+        for (int dx = 0; dx < w; ++dx) {
+            int px = x + dx;
+            int py = y + dy;
+
+            if (rounded) {
+                bool top = dy == 0;
+                bool bottom = dy == h - 1;
+                bool left = dx == 0;
+                bool right = dx == w - 1;
+                if ((top && left) || (top && right) ||
+                    (bottom && left) || (bottom && right)) continue;
+            }
+
+            bool isEdge = (dy == 0 || dy == h - 1 || dx == 0 || dx == w - 1);
+            const rgb_matrix::Color& c = isEdge ? border : fill;
+            canvas->SetPixel(px, py, c.r, c.g, c.b);
+        }
+    }
+}
+
+std::string FetchURL(const std::string& url) {
+    CURL* curl = curl_easy_init();
+    std::string response;
+
+    if (curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);  // handle redirects
+
+        CURLcode res = curl_easy_perform(curl);
+        if (res != CURLE_OK) {
+            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        }
+
+        curl_easy_cleanup(curl);
+    }
+
+    return response;
+}
+
+
+
+rgb_matrix::Color TempToColor(float tempF) {
+    float minT = 32.0f;   // freezing
+    float maxT = 100.0f;  // hot
+    float clamped = std::max(minT, std::min(maxT, tempF));
+
+    // Normalize 0..1
+    float t = (clamped - minT) / (maxT - minT);
+
+    uint8_t r, g, b;
+
+    if (t < 0.33f) {
+        // Blue → Cyan
+        float u = t / 0.33f;
+        r = 0;
+        g = static_cast<uint8_t>(255 * u);
+        b = 255;
+    } else if (t < 0.66f) {
+        // Cyan → Orange
+        float u = (t - 0.33f) / 0.33f;
+        r = static_cast<uint8_t>(255 * u);
+        g = static_cast<uint8_t>(255 - (90 * u));   // 255 → 165
+        b = static_cast<uint8_t>(255 * (1.0f - u)); // 255 → 0
+    } else {
+        // Orange → Red
+        float u = (t - 0.66f) / 0.34f;
+        r = 255;
+        g = static_cast<uint8_t>(165 * (1.0f - u));
+        b = 0;
+    }
+
+    return rgb_matrix::Color(r, g, b);
+}
+
+
+float GetCurrentTempFromOpenMeteo(const std::string& lat, const std::string& lon) {
+    std::string url = "https://api.open-meteo.com/v1/forecast"
+                      "?latitude=" + lat +
+                      "&longitude=" + lon +
+                      "&current_weather=true"
+                      "&temperature_unit=fahrenheit";
+
+    std::string response = FetchURL(url);  // your libcurl wrapper
+    auto data = nlohmann::json::parse(response);
+
+    return data["current_weather"]["temperature"];
+}
+
+
+
+
 
 
 // --- Update static frame ---
@@ -272,58 +415,132 @@ void UpdateStaticFrame(rgb_matrix::FrameCanvas* staticFrame,
                        Color &weatherColor,
                        Color &clockColor,
                        bool isNight) {
-    staticFrame->Clear();
+    
+	if (!staticFrame) {
+		std::cerr << "staticFrame is null!\n";
+    return;
+	}
+	//std::cerr << "staticFrame size: " << staticFrame->width() << "x" << staticFrame->height() << std::endl;
 
-    std::string desc = weatherData.description;
-    std::transform(desc.begin(), desc.end(), desc.begin(), ::tolower);
+	staticFrame->Clear();
+	//std::cerr << "sTransform\n";
+	std::string desc = weatherData.description;
+	std::transform(desc.begin(), desc.end(), desc.begin(), ::tolower);
+
 	//DrawBorder(staticFrame, Color(128, 128, 128));
     // Weather icon shifted upward to y = 24
-	if (desc.find("clear") != std::string::npos) {
-		if (isNight) DrawIcon(staticFrame, 16, 24, moonIcon);
-		else         DrawIcon(staticFrame, 16, 24, sunIcon);
-	} else if (desc.find("partly") != std::string::npos ||
-			   desc.find("few cloud") != std::string::npos ||
-			   desc.find("light cloud") != std::string::npos ||
-			   desc.find("scattered cloud") != std::string::npos) {
-		DrawIcon(staticFrame, 16, 24, partlyCloudyIcon);
-	} else if (desc.find("cloud") != std::string::npos) {
-		DrawIcon(staticFrame, 16, 24, cloudIcon);
-    } else if (desc.find("thunder") != std::string::npos) {
-        DrawIcon(staticFrame, 16, 24, thunderIcon);
-    } else if (desc.find("drizzle") != std::string::npos) {
-        DrawIcon(staticFrame, 16, 24, drizzleIcon);
-    } else if (desc.find("rain") != std::string::npos) {
-        DrawIcon(staticFrame, 16, 24, rainIcon);
-    } else if (desc.find("snow") != std::string::npos) {
-        DrawIcon(staticFrame, 16, 24, snowIcon);
-    } else if (desc.find("fog") != std::string::npos || desc.find("mist") != std::string::npos) {
-        DrawIcon(staticFrame, 16, 24, fogIcon);
-    } else {
-		DrawIcon(staticFrame, 16, 24, friendIcon);
+	//std::cerr << "Draw Icons!\n";
+	try{
+		if (desc.find("clear") != std::string::npos) {
+			if (isNight) DrawIcon(staticFrame, 16, 23, moonIcon);
+			else {
+				DrawIcon(staticFrame, 16, 23, sunIcon);
+			}
+		} else if (desc.find("partly") != std::string::npos ||
+				desc.find("few cloud") != std::string::npos ||
+				desc.find("light cloud") != std::string::npos ||
+				desc.find("scattered cloud") != std::string::npos){
+					DrawIcon(staticFrame, 16, 23, partlyCloudyIcon);
+		} else if (desc.find("cloud") != std::string::npos) {
+			DrawIcon(staticFrame, 16, 23, cloudIcon);
+		} else if (desc.find("thunder") != std::string::npos) {
+			DrawIcon(staticFrame, 16, 23, thunderIcon);
+		} else if (desc.find("drizzle") != std::string::npos) {
+			DrawIcon(staticFrame, 16, 23, drizzleIcon);
+		} else if (desc.find("rain") != std::string::npos) {
+			DrawIcon(staticFrame, 16, 23, rainIcon);
+		} else if (desc.find("haze") != std::string::npos) {
+			DrawIcon(staticFrame, 16, 23, hazeIcon);
+		} else if (desc.find("ash") != std::string::npos) {
+			DrawIcon(staticFrame, 16, 23, ashIcon);
+		} else if (desc.find("smoke") != std::string::npos) {
+			DrawIcon(staticFrame, 16, 23, smokeIcon);			
+		} else if (desc.find("snow") != std::string::npos) {
+			DrawIcon(staticFrame, 16, 23, snowIcon);
+		} else if (desc.find("fog") != std::string::npos || desc.find("mist") != std::string::npos) {
+			DrawIcon(staticFrame, 16, 23, fogIcon);
+		} else {
+			DrawIcon(staticFrame, 16, 23, friendIcon);
+			}
+	} catch (...) {
+		std::cerr << "Failed to Draw Icons: " << weatherData.temp << std::endl;
+	}
+	float tempF = 62.0f;  // default fallback
+	try {
+		std::string tempClean = weatherData.temp;
+		tempClean.erase(std::remove_if(tempClean.begin(), tempClean.end(),
+									   [](char c) { return !std::isdigit(c) && c != '.'; }),
+						tempClean.end());
+		if (!tempClean.empty()) {
+			tempF = std::stof(tempClean);
 		}
+	} catch (...) {
+		std::cerr << "Failed to parse temperature: " << weatherData.temp << std::endl;
+	}
+	//std::cerr << "Temp to colo!\n";
+	
+	//std::cerr << "Draw Text temperature!\n";
+	if (!weatherData.temp.empty() &&
+		weatherData.temp != "Parse error" &&
+		weatherData.temp != "API error") {
+		
+	rgb_matrix::DrawText(staticFrame, tempFont, 0, 0,
+										  weatherColor, nullptr,
+										  weatherData.temp.c_str());
 
-    // Temperature baseline aligned with date (y = 62)
-    int temp_width = rgb_matrix::DrawText(staticFrame, tempFont, 0, 0,
-                                          weatherColor, nullptr,
-                                          weatherData.temp.c_str());
-    int temp_x = (LEFT_PANEL_WIDTH - temp_width) / 2;
-    rgb_matrix::DrawText(staticFrame, tempFont, temp_x, 62,
-                         weatherColor, nullptr, weatherData.temp.c_str());
-    // Day + Date also at y = 62
+	}
+	int temp_width = MeasureTextWidth(tempFont, weatherData.temp);
+
+	//std::cerr << "Get color and fill box!\n";
+	int icon_center_x = 16 + ICON_SIZE / 2;
+
+	//const int TEMP_BOX_WIDTH = 48;
+	const int TEMP_BOX_PADDING = 0;
+	int box_w = temp_width + TEMP_BOX_PADDING * 2;
+	int box_h = tempFont.height() + TEMP_BOX_PADDING * 2;
+	int box_x = icon_center_x - box_w / 2;
+	int box_y = 64 - box_h;  // aligns bottom edge 
+
+
+	rgb_matrix::Color fill = TempToColor(tempF);
+	rgb_matrix::Color border(255, 255, 255);
+
+	try {
+		//DrawFilledRoundedBox(staticFrame, box_x, box_y, box_w, box_h, fill, border);
+		//rgb_matrix::DrawText(staticFrame, tempFont, box_x + 3, box_y + box_h - 4,
+							 //rgb_matrix::Color(255, 255, 255), nullptr,
+							 //weatherData.temp.c_str());
+		DrawTextOutline(staticFrame, tempFont, box_x + 3, 62,fill, rgb_matrix::Color(0, 0, 0), weatherData.temp.c_str());
+	} catch (...) {
+		std::cerr << "Failed to draw temperature box or text: " << weatherData.temp << std::endl;
+	}
+	if (day_str && date_str) {
     rgb_matrix::DrawText(staticFrame, tempFont, RIGHT_PANEL_X + 6, 50,
                          clockColor, nullptr, day_str);
     rgb_matrix::DrawText(staticFrame, tempFont, RIGHT_PANEL_X + 6, 62,
                          clockColor, nullptr, date_str);
+	}
+
+
+
+
+
+
+
 }
 
 // --- Main Program ---
 int main(int argc, char* argv[]) {
+	std::cerr << "Entered main()\n";
     RGBMatrix::Options defaults;
     defaults.rows = 64;
     defaults.cols = 64;
     defaults.chain_length = 2;
     defaults.parallel = 1;
+	
+	std::string lastDayStr, lastDateStr;
 
+	
     rgb_matrix::RuntimeOptions runtime_opt;
     RGBMatrix* matrix = rgb_matrix::CreateMatrixFromFlags(&argc, &argv,
                                                           &defaults, &runtime_opt);
@@ -342,7 +559,7 @@ int main(int argc, char* argv[]) {
     Color clockColor(255, 255, 255);
     Color weatherColor(0, 255, 255);
 
-    std::string api_key = "API_KEY_HERE";
+    std::string api_key = "d659be269008658ad78ec660709ec516";
     std::string city = "Los%20Angeles,US";
 	std::string lat = "34.078";
 	std::string lon = "-118.260";
@@ -352,16 +569,23 @@ int main(int argc, char* argv[]) {
     time_t lastWeatherUpdate = 0;
 	
     // Pre-render icons once
-    LoadIconFromPNG("icons/sun.png", sunIcon);
-    LoadIconFromPNG("icons/moon.png", moonIcon);
-    LoadIconFromPNG("icons/cloud.png", cloudIcon);
-	LoadIconFromPNG("icons/drizzle.png", drizzleIcon);
-    LoadIconFromPNG("icons/rain.png", rainIcon);
-    PreRenderSnow();
-    LoadIconFromPNG("icons/fog.png", fogIcon);
-	LoadIconFromPNG("icons/light_cloud.png", partlyCloudyIcon);
-	LoadIconFromPNG("icons/friend.png", friendIcon);
-	LoadIconFromPNG("icons/thunder.png", thunderIcon);
+	try {
+		LoadIconFromPNG("icons/sun.png", sunIcon);
+		LoadIconFromPNG("icons/moon.png", moonIcon);
+		LoadIconFromPNG("icons/cloud.png", cloudIcon);
+		LoadIconFromPNG("icons/drizzle.png", drizzleIcon);
+		LoadIconFromPNG("icons/rain.png", rainIcon);
+		LoadIconFromPNG("icons/snow.png", snowIcon);
+		LoadIconFromPNG("icons/fog.png", fogIcon);
+		LoadIconFromPNG("icons/light_cloud.png", partlyCloudyIcon);
+		LoadIconFromPNG("icons/friend.png", friendIcon);
+		LoadIconFromPNG("icons/thunder.png", thunderIcon);
+		LoadIconFromPNG("icons/ash.png", ashIcon);
+		LoadIconFromPNG("icons/haze.png", hazeIcon);
+		LoadIconFromPNG("icons/smoke.png", smokeIcon);
+	} catch (...) {
+    std::cerr << "Failed to load png: " << std::endl;
+	}
 
     // Buffers
     rgb_matrix::FrameCanvas* offscreen = matrix->CreateFrameCanvas();
@@ -379,31 +603,60 @@ int main(int argc, char* argv[]) {
 
         char day_str[64];
         strftime(day_str, sizeof(day_str), "%A", tm_now);
+		
+		std::string currentDayStr(day_str);
+		std::string currentDateStr(date_str);
+		//std::cerr << "Check Dates: " << time_str << std::endl;
+		bool dateChanged = (currentDayStr != lastDayStr || currentDateStr != lastDateStr);
 
+		
         // Update weather every 15 minutes
-        if (difftime(now, lastWeatherUpdate) > 900 || weatherData.temp.empty()) {
+        if (difftime(now, lastWeatherUpdate) > 900 || weatherData.temp.empty() || dateChanged) {
+			//std::cerr << "Update Weather: " << time_str << std::endl;
             std::string weatherJson = GetWeather(lat, lon, api_key, units);
             weatherData = ParseWeather(weatherJson, units);
+			try {
+				float tempF = GetCurrentTempFromOpenMeteo(lat, lon);  // Los Angeles
+				std::ostringstream oss;
+				oss << std::fixed << std::setprecision(1) << tempF << "°F";
+				weatherData.temp = oss.str();
+
+			} catch (...) {
+				std::cerr << "Failed to get temp from open meteo, Using OWM " << std::endl;
+			}
             lastWeatherUpdate = now;
 
             int hour = tm_now->tm_hour;
             bool isNight = (hour < 6 || hour >= 18);
-
+			std::cerr << "Update static fram: " << time_str << std::endl;
             UpdateStaticFrame(staticFrame, weatherData, day_str, date_str,
                               tempFont, weatherColor, clockColor, isNight);
         }
+		lastDateStr = currentDateStr;
+		lastDayStr = currentDayStr;
+		
 
         // Compose frame: copy static + overlay time
+		//std::cerr << "Clear offscreen: " << time_str << std::endl;
         offscreen->Clear();
+		//std::cerr << "write offscreen: " << time_str << std::endl;
         offscreen->CopyFrom(*staticFrame);
-
+		
+		
+		if (strlen(time_str) == 0) {
+			std::cerr << "Empty time string — skipping draw\n";
+			continue;
+		}
+		//std::cerr << "Drawing time: " << time_str << std::endl;
+		
         int time_width = rgb_matrix::DrawText(offscreen, clockFont, 0, 0,
                                               clockColor, nullptr, time_str);
         int time_x = (TOTAL_WIDTH - time_width) / 2;
+		//std::cerr << "Draw Offscreen: " << time_str << std::endl;
         rgb_matrix::DrawText(offscreen, clockFont, time_x, 20,
                              clockColor, nullptr, time_str);
 		
-		
+		//std::cerr << "Swap Frame: " << time_str << std::endl;
         // Swap completed frame
         offscreen = matrix->SwapOnVSync(offscreen);
 
