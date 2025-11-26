@@ -46,6 +46,8 @@ Pixel friendIcon[ICON_SIZE][ICON_SIZE];
 Pixel hazeIcon[ICON_SIZE][ICON_SIZE];
 Pixel ashIcon[ICON_SIZE][ICON_SIZE];
 Pixel smokeIcon[ICON_SIZE][ICON_SIZE];
+Pixel moonCloudIcon[ICON_SIZE][ICON_SIZE];
+Pixel moonPartlyCloudIcon[ICON_SIZE][ICON_SIZE];
 
 
 // --- Weather Fetch Helpers ---
@@ -440,9 +442,15 @@ void UpdateStaticFrame(rgb_matrix::FrameCanvas* staticFrame,
 				desc.find("few cloud") != std::string::npos ||
 				desc.find("light cloud") != std::string::npos ||
 				desc.find("scattered cloud") != std::string::npos){
-					DrawIcon(staticFrame, 16, 23, partlyCloudyIcon);
+			if (isNight) DrawIcon(staticFrame, 16, 23, moonPartlyCloudIcon);
+			else {
+				DrawIcon(staticFrame, 16, 23, partlyCloudyIcon);
+			}
 		} else if (desc.find("cloud") != std::string::npos) {
-			DrawIcon(staticFrame, 16, 23, cloudIcon);
+				if (isNight) DrawIcon(staticFrame, 16, 23, moonCloudIcon);
+				else {
+				DrawIcon(staticFrame, 16, 23, cloudIcon);
+			}
 		} else if (desc.find("thunder") != std::string::npos) {
 			DrawIcon(staticFrame, 16, 23, thunderIcon);
 		} else if (desc.find("drizzle") != std::string::npos) {
@@ -559,7 +567,7 @@ int main(int argc, char* argv[]) {
     Color clockColor(255, 255, 255);
     Color weatherColor(0, 255, 255);
 
-    std::string api_key = "d659be269008658ad78ec660709ec516";
+    std::string api_key = "YOUR API KEY";
     std::string city = "Los%20Angeles,US";
 	std::string lat = "34.078";
 	std::string lon = "-118.260";
@@ -583,6 +591,8 @@ int main(int argc, char* argv[]) {
 		LoadIconFromPNG("icons/ash.png", ashIcon);
 		LoadIconFromPNG("icons/haze.png", hazeIcon);
 		LoadIconFromPNG("icons/smoke.png", smokeIcon);
+		LoadIconFromPNG("icons/night_lightcloud.png", moonPartlyCloudIcon);
+		LoadIconFromPNG("icons/night_cloud.png", moonCloudIcon);
 	} catch (...) {
     std::cerr << "Failed to load png: " << std::endl;
 	}
