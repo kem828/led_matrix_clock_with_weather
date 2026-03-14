@@ -5,7 +5,8 @@ Clock with weather display for Raspberry Pi (tested on 3B) driving a 128x64 LED 
 Built on [hzeller/rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix).
 
 ![Clock photo](https://github.com/kem828/led_matrix_clock_with_weather/blob/main/led_clock.jpg?raw=true)
-
+Wide Mode
+![Wide Mode photo](https://github.com/kem828/led_matrix_clock_with_weather/blob/main/wide_clock.jpg?raw=true)
 All icons by [maxhollingsheadart](https://www.instagram.com/maxhollingsheadart)
 
 ---
