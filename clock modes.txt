@@ -1,0 +1,6 @@
+Style	Look	Standard	Wide/Clock-only
+"classic"	Balanced, standard 7-seg	w=10 h=18 t=2	w=13 h=27 t=3
+"bold"	Thick, chunky, high visibility	w=11 h=19 t=3	w=16 h=36 t=4
+"slim"	Single-pixel segments, minimal	w=8 h=17 t=1	w=11 h=37 t=1
+"tall"	Narrow digits, maximum height	w=7 h=20 t=2	w=9 h=38 t=2
+"retro"	Wide squat digits, calculator look	w=14 h=19 t=3	w=18 h=28 t=4

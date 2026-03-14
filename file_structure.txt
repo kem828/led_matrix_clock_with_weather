@@ -1,11 +1,27 @@
 clock-display/
-├── clock.cc               # Main program
+├── clock.cc               # Main program (all display, weather, and config logic)
 ├── Makefile
-├── fonts/                 # BDF font files
-│   ├── 6x12.bdf
-│   └── 12x24.bdf
-├── icons/                 # PNG weather icons (e.g. sun.png, cloud.png)
-├── lodepng/               # PNG decoder
+├── config.json            # Runtime configuration (API key, location, brightness, layouts)
+├── fonts/
+│   ├── 6x12.bdf           # Used for weather text, temperature, date
+│   └── 12x24.bdf          # Loaded but superseded by programmatic 7-segment rendering
+├── icons/                 # 32x32 PNG weather icons (loaded at startup, alpha-composited)
+│   ├── sun.png
+│   ├── moon.png
+│   ├── cloud.png
+│   ├── light_cloud.png    # Partly cloudy (day)
+│   ├── night_cloud.png    # Overcast (night)
+│   ├── night_lightcloud.png  # Partly cloudy (night)
+│   ├── drizzle.png
+│   ├── rain.png
+│   ├── snow.png
+│   ├── fog.png
+│   ├── thunder.png
+│   ├── haze.png
+│   ├── ash.png
+│   ├── smoke.png
+│   └── friend.png         # Fallback / unknown weather condition
+├── lodepng/               # PNG decoder (single header + source)
 │   ├── lodepng.h
 │   └── lodepng.cpp
-└── ../rpi-rgb-led-matrix/ # Cloned matrix library
+└── ../rpi-rgb-led-matrix/ # Cloned matrix library (hzeller/rpi-rgb-led-matrix)

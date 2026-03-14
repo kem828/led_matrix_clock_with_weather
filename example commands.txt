@@ -1,0 +1,32 @@
+sudo ./clock \
+  --day-brightness=75 \
+  --night-brightness=20 \
+  --night-start=21 \
+  --night-end=7 \
+  --led-rows=64 \
+  --led-cols=128 \
+  --led-pwm-bits=9 \
+  --led-limit-refresh=90 \
+  --led-slowdown-gpio=2
+  
+  
+sudo ./clock --clock-only \
+  --day-brightness=75 \
+  --night-brightness=20 \
+  --led-rows=64 \
+  --led-cols=128 \
+  --led-pwm-bits=9 \
+  --led-limit-refresh=90 \
+  --led-slowdown-gpio=2
+  
+sudo ./clock \
+  --day-brightness=75 \
+  --night-brightness=20 \
+  --night-start=21 \
+  --night-end=7 \
+  --led-rows=64 \
+  --led-cols=128 \
+  --led-chain=2 \
+  --led-pwm-bits=9 \
+  --led-limit-refresh=90 \
+  --led-slowdown-gpio=2
