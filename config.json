@@ -9,6 +9,8 @@
   "night_end": 6,
   "clock_only": false,
   "clock_font": "classic",
+  "moon_phase_icons": false,
+  "sunrise_sunset_icons": "default",
   "layouts": {
     "standard": [
       { "type": "weather_icon", "x": 16, "y": 23 },
@@ -18,7 +20,7 @@
     "wide_horizontal": [
       { "type": "weather_icon", "x": 132, "y": 2 },
       { "type": "temperature", "x": 180, "y": 22 },
-      { "type": "weather_desc", "x": 132, "y": 42 },
+      { "type": "weather_desc", "x": 132, "y": 42, "width": 66 },
       { "type": "day_date", "x": 132, "y": 52 },
       { "type": "moon_phase", "x": 220, "y": 2 },
       { "type": "forecast", "x": 200, "y": 32 },
@@ -27,7 +29,7 @@
     "wide_vertical": [
       { "type": "weather_icon", "x": 16, "y": 66 },
       { "type": "temperature", "x": 52, "y": 86 },
-      { "type": "weather_desc", "x": 4, "y": 106 },
+      { "type": "weather_desc", "x": 4, "y": 106, "width": 100 },
       { "type": "day_date", "x": 70, "y": 114 },
       { "type": "moon_phase", "x": 100, "y": 68 },
       { "type": "forecast", "x": 0, "y": 96 },

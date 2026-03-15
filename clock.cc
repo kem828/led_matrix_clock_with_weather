@@ -38,6 +38,7 @@ enum class ModuleType {
 struct ModulePlacement {
     ModuleType type;
     int x, y;
+    int width = 0; // max pixel width; 0 = unconstrained
 };
 
 // --- Clock Font Styles (forward-declared here so ClockConfig can use ClockFont) ---
@@ -112,6 +113,16 @@ Pixel ashIcon[ICON_SIZE][ICON_SIZE];
 Pixel smokeIcon[ICON_SIZE][ICON_SIZE];
 Pixel moonCloudIcon[ICON_SIZE][ICON_SIZE];
 Pixel moonPartlyCloudIcon[ICON_SIZE][ICON_SIZE];
+// Moon phase PNG icons (8 phases, in order: New, WaxCrescent, FirstQ, WaxGibbous,
+//                                            Full, WanGibbous, ThirdQ, WanCrescent)
+Pixel moonPhaseIcons[8][ICON_SIZE][ICON_SIZE];
+
+// Sunrise/sunset PNG icons loaded from selected style set (icons/sunrise/).
+// Standard sets: 8x8. Wide sets (e.g. modern_wide): 13x8 (wider, same height).
+// Both stored in top-left corner of ICON_SIZE buffer.
+Pixel sunrisePngIcon[ICON_SIZE][ICON_SIZE];
+Pixel sunsetPngIcon[ICON_SIZE][ICON_SIZE];
+int sunrisePngIconW = 8; // pixel width of loaded icon (height is always 8)
 
 // --- App Configuration ---
 struct ClockConfig {
@@ -125,6 +136,8 @@ struct ClockConfig {
     int nightEnd = 6;
     bool clockOnly = false;
     ClockFont clockFont = ClockFont::Classic;
+    bool moonPhaseIconMode = false;
+    std::string sunriseStyle = "default"; // "default" | "flower" | "horizon" | "modern" | "pacman"
     std::vector<ModulePlacement> standardLayout;
     std::vector<ModulePlacement> wideHorizontalLayout;
     std::vector<ModulePlacement> wideVerticalLayout;
@@ -148,6 +161,7 @@ std::vector<ModulePlacement> ParseLayout(const nlohmann::json& arr) {
         mp.type = ParseModuleType(item.value("type", ""));
         mp.x = item.value("x", 0);
         mp.y = item.value("y", 0);
+        mp.width = item.value("width", 0);
         layout.push_back(mp);
     }
     return layout;
@@ -162,7 +176,7 @@ void SetDefaultLayouts(ClockConfig& config) {
     config.wideHorizontalLayout = {
         {ModuleType::WeatherIcon, 132, 2},
         {ModuleType::Temperature, 180, 22},
-        {ModuleType::WeatherDesc, 132, 42},
+        {ModuleType::WeatherDesc, 132, 42, 66},
         {ModuleType::DayDate, 132, 52},
         {ModuleType::MoonPhase, 220, 2},
         {ModuleType::Forecast, 200, 32},
@@ -171,7 +185,7 @@ void SetDefaultLayouts(ClockConfig& config) {
     config.wideVerticalLayout = {
         {ModuleType::WeatherIcon, 16, 66},
         {ModuleType::Temperature, 52, 86},
-        {ModuleType::WeatherDesc, 4, 106},
+        {ModuleType::WeatherDesc, 4, 106, 100},
         {ModuleType::DayDate, 70, 114},
         {ModuleType::MoonPhase, 100, 68},
         {ModuleType::Forecast, 0, 96},
@@ -203,6 +217,8 @@ ClockConfig LoadConfig(const std::string& path) {
         config.nightEnd = j.value("night_end", config.nightEnd);
         config.clockOnly = j.value("clock_only", config.clockOnly);
         config.clockFont = ParseClockFont(j.value("clock_font", "classic"));
+        config.moonPhaseIconMode = j.value("moon_phase_icons", config.moonPhaseIconMode);
+        config.sunriseStyle = j.value("sunrise_sunset_icons", config.sunriseStyle);
 
         if (j.contains("layouts")) {
             auto& layouts = j["layouts"];
@@ -540,6 +556,8 @@ struct DailyForecast {
     float tempMax = 0, tempMin = 0;
     std::string sunrise;    // "7:04 AM"
     std::string sunset;     // "7:00 PM"
+    int sunriseMinutes = -1; // minutes since midnight, local time
+    int sunsetMinutes  = -1;
 };
 
 struct OpenMeteoData {
@@ -600,6 +618,7 @@ OpenMeteoData GetFromOpenMeteo(const std::string& lat, const std::string& lon, U
                       "&current_weather=true"
                       "&temperature_unit=" + tempUnit +
                       "&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset"
+                      "&hourly=weather_code"
                       "&forecast_days=3"
                       "&timezone=auto";
 
@@ -615,15 +634,42 @@ OpenMeteoData GetFromOpenMeteo(const std::string& lat, const std::string& lon, U
     if (data.contains("daily")) {
         auto& daily = data["daily"];
         int days = std::min(3, (int)daily["time"].size());
+        auto isoToMinutes = [](const std::string& isoTime) -> int {
+            auto tpos = isoTime.find('T');
+            if (tpos == std::string::npos) return -1;
+            int h = 0, m = 0;
+            if (sscanf(isoTime.c_str() + tpos + 1, "%d:%d", &h, &m) != 2) return -1;
+            return h * 60 + m;
+        };
+        // Pre-extract hourly noon codes (index day*24+12) for a daytime-representative
+        // weather code. The daily aggregate uses the most severe code across the whole
+        // 24h period, which can be dominated by pre-dawn fog even on sunny afternoons.
+        std::vector<int> noonCodes(days, -1);
+        if (data.contains("hourly") && data["hourly"].contains("weather_code")) {
+            auto& hourlyCodes = data["hourly"]["weather_code"];
+            for (int i = 0; i < days; i++) {
+                int idx = i * 24 + 12; // noon local time
+                if (idx < (int)hourlyCodes.size())
+                    noonCodes[i] = hourlyCodes[idx].get<int>();
+            }
+        }
+
         for (int i = 0; i < days; i++) {
             std::string dateStr = daily["time"][i].get<std::string>();
             result.daily[i].date = FormatMeteoDate(dateStr);
             result.daily[i].dayLetter = DayOfWeekLetter(dateStr);
-            result.daily[i].weatherCode = daily["weather_code"][i].get<int>();
+            // Use noon hourly code if available; fall back to daily aggregate
+            result.daily[i].weatherCode = (noonCodes[i] >= 0)
+                                          ? noonCodes[i]
+                                          : daily["weather_code"][i].get<int>();
             result.daily[i].tempMax = daily["temperature_2m_max"][i].get<float>();
             result.daily[i].tempMin = daily["temperature_2m_min"][i].get<float>();
-            result.daily[i].sunrise = FormatMeteoTime(daily["sunrise"][i].get<std::string>());
-            result.daily[i].sunset = FormatMeteoTime(daily["sunset"][i].get<std::string>());
+            std::string srIso = daily["sunrise"][i].get<std::string>();
+            std::string ssIso = daily["sunset"][i].get<std::string>();
+            result.daily[i].sunrise = FormatMeteoTime(srIso);
+            result.daily[i].sunset  = FormatMeteoTime(ssIso);
+            result.daily[i].sunriseMinutes = isoToMinutes(srIso);
+            result.daily[i].sunsetMinutes  = isoToMinutes(ssIso);
         }
     }
 
@@ -647,13 +693,18 @@ void Draw7Segment(rgb_matrix::FrameCanvas* canvas, int ox, int oy,
     int vhTop = mid - t;            // top vertical height
     int vhBot = h - mid - 2 * t;   // bottom vertical height (symmetric to vhTop)
 
-    if (segs & 0x01) fill(t,     0,       hw, t);     // a: top
-    if (segs & 0x02) fill(w - t, t,       t,  vhTop); // b: top-right
-    if (segs & 0x04) fill(w - t, mid + t, t,  vhBot); // c: bottom-right
-    if (segs & 0x08) fill(t,     h - t,   hw, t);     // d: bottom
-    if (segs & 0x10) fill(0,     mid + t, t,  vhBot); // e: bottom-left
-    if (segs & 0x20) fill(0,     t,       t,  vhTop); // f: top-left
-    if (segs & 0x40) fill(t,     mid,     hw, t);     // g: middle
+    // Digit '1' (segs == 0x06) only lights right-side verticals, which leaves the left
+    // portion of the bounding box empty and makes the digit look visually right-shifted.
+    // Center it so the strokes sit in the middle of the slot instead.
+    int xr = (segs == 0x06) ? (w - t) / 2 : w - t;
+
+    if (segs & 0x01) fill(t,   0,       hw, t);     // a: top
+    if (segs & 0x02) fill(xr,  t,       t,  vhTop); // b: top-right
+    if (segs & 0x04) fill(xr,  mid + t, t,  vhBot); // c: bottom-right
+    if (segs & 0x08) fill(t,   h - t,   hw, t);     // d: bottom
+    if (segs & 0x10) fill(0,   mid + t, t,  vhBot); // e: bottom-left
+    if (segs & 0x20) fill(0,   t,       t,  vhTop); // f: top-left
+    if (segs & 0x40) fill(t,   mid,     hw, t);     // g: middle
 }
 
 void Draw7SegColon(rgb_matrix::FrameCanvas* canvas, int x, int y,
@@ -784,12 +835,35 @@ void DrawDayDateModule(rgb_matrix::FrameCanvas* canvas, const rgb_matrix::Font& 
     if (date) rgb_matrix::DrawText(canvas, font, x, dateY, color, nullptr, date);
 }
 
+// Returns a copy of text truncated so it fits within maxWidth pixels.
+// Appends ".." if truncated. maxWidth=0 means no limit.
+std::string TruncateToWidth(const rgb_matrix::Font& font, const std::string& text, int maxWidth) {
+    if (maxWidth <= 0) return text;
+    int dotdotW = font.CharacterWidth('.') * 2;
+    int w = 0;
+    for (int i = 0; i < (int)text.size(); i++) {
+        int cw = font.CharacterWidth(text[i]);
+        if (w + cw > maxWidth) {
+            // Backtrack to fit ".."
+            int j = i;
+            while (j > 0 && w + dotdotW > maxWidth) {
+                w -= font.CharacterWidth(text[j - 1]);
+                j--;
+            }
+            return text.substr(0, j) + "..";
+        }
+        w += cw;
+    }
+    return text;
+}
+
 void DrawWeatherDescModule(rgb_matrix::FrameCanvas* canvas, const rgb_matrix::Font& font,
                            int x, int y, const std::string& desc,
-                           const rgb_matrix::Color& color) {
+                           const rgb_matrix::Color& color, int maxWidth = 0) {
     if (!desc.empty() && desc != "No data" && desc != "Parse error" && desc != "API error") {
         std::string d = desc;
         if (!d.empty()) d[0] = std::toupper(d[0]);
+        d = TruncateToWidth(font, d, maxWidth);
         rgb_matrix::DrawText(canvas, font, x, y, color, nullptr, d.c_str());
     }
 }
@@ -897,10 +971,17 @@ double MoonPhaseAge() {
     return age;
 }
 
-void DrawMoonPhaseModule(rgb_matrix::FrameCanvas* canvas, int x, int y) {
+void DrawMoonPhaseModule(rgb_matrix::FrameCanvas* canvas, int x, int y, bool useIcons = false) {
     double age = MoonPhaseAge();
     double synodic = 29.53059;
     double phase = age / synodic; // 0..1
+
+    if (useIcons) {
+        // Map phase to one of 8 equal segments (round to nearest)
+        int idx = (int)(phase * 8.0 + 0.5) % 8;
+        DrawIcon(canvas, x, y, moonPhaseIcons[idx]);
+        return;
+    }
 
     int cx = x + 7, cy = y + 7; // center of 16x16
     int radius = 6;
@@ -932,69 +1013,89 @@ void DrawMoonPhaseModule(rgb_matrix::FrameCanvas* canvas, int x, int y) {
 }
 
 // --- Mini Weather Icons (8x8, procedural) ---
+// WMO code groups: 0-1=clear, 2=partly cloudy, 3=overcast,
+// 45/48=fog, 51-67=drizzle/rain, 61-82=rain, 71-77/85-86=snow, 95-99=thunder.
 void DrawMiniWeatherIcon(rgb_matrix::FrameCanvas* canvas, int x, int y, int wmoCode) {
     rgb_matrix::Color yellow(255, 200, 0);
     rgb_matrix::Color gray(150, 150, 150);
     rgb_matrix::Color blue(50, 100, 255);
     rgb_matrix::Color white(255, 255, 255);
+    rgb_matrix::Color ltgray(200, 200, 200);
+
+    auto px = [&](int dx, int dy, const rgb_matrix::Color& c) {
+        canvas->SetPixel(x + dx, y + dy, c.r, c.g, c.b);
+    };
+
+    // Reusable sun: small circle at (cx,cy)
+    auto drawSun = [&](int cx, int cy) {
+        px(cx,   cy-1, yellow); px(cx,   cy+1, yellow);
+        px(cx-1, cy,   yellow); px(cx+1, cy,   yellow);
+        px(cx,   cy,   yellow);
+    };
+    // Reusable cloud blob at (cx,cy): 5-wide, 2-tall
+    auto drawCloud = [&](int cx, int cy) {
+        for (int dx = -2; dx <= 2; dx++) px(cx + dx, cy,   gray);
+        for (int dx = -1; dx <= 1; dx++) px(cx + dx, cy-1, gray);
+    };
 
     if (wmoCode <= 1) {
-        // Clear/sunny: circle with rays
-        for (int dy = -2; dy <= 2; dy++)
-            for (int dx = -2; dx <= 2; dx++)
-                if (dx*dx + dy*dy <= 4)
-                    canvas->SetPixel(x + 3 + dx, y + 3 + dy, yellow.r, yellow.g, yellow.b);
-        // rays
-        canvas->SetPixel(x + 3, y, yellow.r, yellow.g, yellow.b);
-        canvas->SetPixel(x + 3, y + 6, yellow.r, yellow.g, yellow.b);
-        canvas->SetPixel(x, y + 3, yellow.r, yellow.g, yellow.b);
-        canvas->SetPixel(x + 6, y + 3, yellow.r, yellow.g, yellow.b);
-    } else if (wmoCode <= 3) {
-        // Cloudy: rounded blob
-        for (int dx = 1; dx <= 5; dx++) {
-            canvas->SetPixel(x + dx, y + 3, gray.r, gray.g, gray.b);
-            canvas->SetPixel(x + dx, y + 4, gray.r, gray.g, gray.b);
-        }
-        for (int dx = 2; dx <= 4; dx++)
-            canvas->SetPixel(x + dx, y + 2, gray.r, gray.g, gray.b);
-    } else if (wmoCode <= 57) {
-        // Drizzle/fog: cloud + dots
-        for (int dx = 1; dx <= 5; dx++)
-            canvas->SetPixel(x + dx, y + 2, gray.r, gray.g, gray.b);
-        for (int dx = 2; dx <= 4; dx++)
-            canvas->SetPixel(x + dx, y + 1, gray.r, gray.g, gray.b);
-        canvas->SetPixel(x + 2, y + 4, blue.r, blue.g, blue.b);
-        canvas->SetPixel(x + 4, y + 5, blue.r, blue.g, blue.b);
+        // Clear: sun with 4 rays
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+                px(3 + dx, 3 + dy, yellow);
+        px(3, 0, yellow); px(3, 6, yellow);
+        px(0, 3, yellow); px(6, 3, yellow);
+
+    } else if (wmoCode == 2) {
+        // Partly cloudy: same cloud as code 3, but rightmost two cloud pixels replaced
+        // with yellow so the sun visibly merges with the cloud edge (no floating gap).
+        // Yellow pixels: (4,2)(5,2)(5,3)(6,3) — 2x2 block, all touching the cloud.
+        drawCloud(3, 3);
+        for (int dx = -2; dx <= 2; dx++) px(3 + dx, 4, gray); // bottom row
+        px(4, 2, yellow); // overwrite rightmost bump pixel
+        px(5, 2, yellow); // extend outward from bump
+        px(5, 3, yellow); // overwrite rightmost body pixel
+        px(6, 3, yellow); // extend outward from body
+
+    } else if (wmoCode == 3) {
+        // Overcast: full cloud with sun peeking at top-right (touching the cloud edge)
+        drawCloud(3, 3);
+        for (int dx = -2; dx <= 2; dx++) px(3 + dx, 4, gray);
+        px(5, 2, yellow); // adjacent to cloud top-right bump at (4,2)
+        px(6, 3, yellow); // adjacent to cloud right side at (5,3)
+
+    } else if (wmoCode == 45 || wmoCode == 48) {
+        // Fog: horizontal dashes
+        for (int dx = 1; dx <= 5; dx++) px(dx, 2, ltgray);
+        for (int dx = 0; dx <= 4; dx++) px(dx, 4, ltgray);
+        for (int dx = 2; dx <= 6; dx++) px(dx, 6, ltgray);
+
+    } else if (wmoCode <= 67) {
+        // Drizzle / freezing rain: cloud + light drops (51-67)
+        drawCloud(3, 2);
+        px(2, 4, blue); px(4, 5, blue); px(3, 6, blue);
+
+    } else if (wmoCode <= 77) {
+        // Snow fall: cloud + snowflake dots (71-77)
+        drawCloud(3, 2);
+        px(2, 4, white); px(4, 5, white); px(3, 6, white);
+
     } else if (wmoCode <= 82) {
-        // Rain: cloud + rain drops
-        for (int dx = 1; dx <= 5; dx++)
-            canvas->SetPixel(x + dx, y + 2, gray.r, gray.g, gray.b);
-        for (int dx = 2; dx <= 4; dx++)
-            canvas->SetPixel(x + dx, y + 1, gray.r, gray.g, gray.b);
-        canvas->SetPixel(x + 2, y + 4, blue.r, blue.g, blue.b);
-        canvas->SetPixel(x + 3, y + 5, blue.r, blue.g, blue.b);
-        canvas->SetPixel(x + 4, y + 4, blue.r, blue.g, blue.b);
-        canvas->SetPixel(x + 2, y + 6, blue.r, blue.g, blue.b);
+        // Rain showers: cloud + more drops (80-82)
+        drawCloud(3, 2);
+        px(2, 4, blue); px(4, 4, blue);
+        px(3, 5, blue); px(2, 6, blue); px(4, 6, blue);
+
     } else if (wmoCode <= 86) {
-        // Snow: cloud + snowflakes
-        for (int dx = 1; dx <= 5; dx++)
-            canvas->SetPixel(x + dx, y + 2, gray.r, gray.g, gray.b);
-        for (int dx = 2; dx <= 4; dx++)
-            canvas->SetPixel(x + dx, y + 1, gray.r, gray.g, gray.b);
-        canvas->SetPixel(x + 2, y + 4, white.r, white.g, white.b);
-        canvas->SetPixel(x + 4, y + 5, white.r, white.g, white.b);
-        canvas->SetPixel(x + 3, y + 6, white.r, white.g, white.b);
+        // Snow showers: cloud + snowflake dots (85-86)
+        drawCloud(3, 2);
+        px(2, 4, white); px(4, 5, white); px(3, 6, white);
+
     } else {
-        // Thunderstorm: cloud + lightning bolt
-        for (int dx = 1; dx <= 5; dx++)
-            canvas->SetPixel(x + dx, y + 1, gray.r, gray.g, gray.b);
-        for (int dx = 2; dx <= 4; dx++)
-            canvas->SetPixel(x + dx, y + 0, gray.r, gray.g, gray.b);
-        // zigzag
-        canvas->SetPixel(x + 4, y + 3, yellow.r, yellow.g, yellow.b);
-        canvas->SetPixel(x + 3, y + 4, yellow.r, yellow.g, yellow.b);
-        canvas->SetPixel(x + 4, y + 5, yellow.r, yellow.g, yellow.b);
-        canvas->SetPixel(x + 3, y + 6, yellow.r, yellow.g, yellow.b);
+        // Thunderstorm: cloud + lightning bolt (95-99)
+        drawCloud(3, 1);
+        px(4, 3, yellow); px(3, 4, yellow);
+        px(4, 5, yellow); px(3, 6, yellow);
     }
 }
 
@@ -1071,17 +1172,38 @@ void DrawTinyTimeString(rgb_matrix::FrameCanvas* canvas, int x, int y,
     }
 }
 
-void DrawSunriseSunsetModule(rgb_matrix::FrameCanvas* canvas, int x, int y,
-                             const OpenMeteoData& meteo) {
-    rgb_matrix::Color riseColor(255, 180, 0);
-    rgb_matrix::Color setColor(255, 100, 30);
+// Draw the top-left w x h pixels of a loaded PNG icon (ignoring the rest).
+void DrawIconSmall(rgb_matrix::FrameCanvas* canvas, int x, int y,
+                   Pixel icon[ICON_SIZE][ICON_SIZE], int w, int h) {
+    for (int row = 0; row < h; row++)
+        for (int col = 0; col < w; col++) {
+            Pixel p = icon[row][col];
+            if (p.r || p.g || p.b)
+                canvas->SetPixel(x + col, y + row, p.r, p.g, p.b);
+        }
+}
 
-    // Top half: sunrise
-    DrawMiniSunIcon(canvas, x, y, true);
+void DrawSunriseSunsetModule(rgb_matrix::FrameCanvas* canvas, int x, int y,
+                             const OpenMeteoData& meteo,
+                             const std::string& style) {
+    rgb_matrix::Color riseColor(255, 180, 0);
+    rgb_matrix::Color setColor(80, 80, 220); // blue/indigo for sunset time
+
+    bool usePng = (style != "default");
+    // Width varies (8 standard, 13 for modern_wide); height is always 8.
+    int iconW = usePng ? sunrisePngIconW : 8;
+
+    // Module layout is fixed regardless of icon width.
+    if (usePng)
+        DrawIconSmall(canvas, x, y, sunrisePngIcon, iconW, 8);
+    else
+        DrawMiniSunIcon(canvas, x, y, true);
     DrawTinyTimeString(canvas, x, y + 10, meteo.daily[0].sunrise, riseColor);
 
-    // Bottom half: sunset
-    DrawMiniSunIcon(canvas, x, y + 16, false);
+    if (usePng)
+        DrawIconSmall(canvas, x, y + 16, sunsetPngIcon, iconW, 8);
+    else
+        DrawMiniSunIcon(canvas, x, y + 16, false);
     DrawTinyTimeString(canvas, x, y + 26, meteo.daily[0].sunset, setColor);
 }
 
@@ -1092,7 +1214,7 @@ void UpdateStaticFrame(rgb_matrix::FrameCanvas* staticFrame,
                        const OpenMeteoData& meteoData,
                        const char* day_str, const char* date_str,
                        Font& tempFont, Color& weatherColor, Color& clockColor,
-                       bool isNight, DisplayMode mode) {
+                       bool isIconNight, DisplayMode mode) {
     if (!staticFrame) {
         std::cerr << "staticFrame is null!\n";
         return;
@@ -1106,7 +1228,7 @@ void UpdateStaticFrame(rgb_matrix::FrameCanvas* staticFrame,
     for (const auto& mod : layout) {
         switch (mod.type) {
         case ModuleType::WeatherIcon:
-            DrawWeatherIconModule(staticFrame, mod.x, mod.y, weatherData.description, isNight);
+            DrawWeatherIconModule(staticFrame, mod.x, mod.y, weatherData.description, isIconNight);
             break;
         case ModuleType::Temperature: {
             int tx = mod.x;
@@ -1129,16 +1251,16 @@ void UpdateStaticFrame(rgb_matrix::FrameCanvas* staticFrame,
             break;
         case ModuleType::WeatherDesc:
             DrawWeatherDescModule(staticFrame, tempFont, mod.x, mod.y,
-                                 weatherData.description, weatherColor);
+                                 weatherData.description, weatherColor, mod.width);
             break;
         case ModuleType::MoonPhase:
-            DrawMoonPhaseModule(staticFrame, mod.x, mod.y);
+            DrawMoonPhaseModule(staticFrame, mod.x, mod.y, config.moonPhaseIconMode);
             break;
         case ModuleType::Forecast:
             DrawForecastModule(staticFrame, tempFont, mod.x, mod.y, meteoData);
             break;
         case ModuleType::SunriseSunset:
-            DrawSunriseSunsetModule(staticFrame, mod.x, mod.y, meteoData);
+            DrawSunriseSunsetModule(staticFrame, mod.x, mod.y, meteoData, config.sunriseStyle);
             break;
         }
     }
@@ -1152,6 +1274,18 @@ bool IsNightTime(int hour, int nightStart, int nightEnd) {
     } else {
         return hour >= nightStart && hour < nightEnd;
     }
+}
+
+// Returns true if current time is before sunrise or at/after sunset.
+// sunriseMinutes / sunsetMinutes are minutes-since-midnight from forecast data (-1 = unknown).
+bool IsIconNight(int hour24, int minute, int sunriseMinutes, int sunsetMinutes) {
+    if (sunriseMinutes < 0 || sunsetMinutes < 0) {
+        // No data yet; fall back to a simple 6am-8pm day window
+        int m = hour24 * 60 + minute;
+        return m < 360 || m >= 1200;
+    }
+    int m = hour24 * 60 + minute;
+    return m < sunriseMinutes || m >= sunsetMinutes;
 }
 
 // --- CLI Argument Parsing ---
@@ -1257,6 +1391,40 @@ int main(int argc, char* argv[]) {
         std::cerr << "Failed to load png icons\n";
     }
 
+    if (config.moonPhaseIconMode) {
+        static const char* moonPhaseFiles[8] = {
+            "icons/moon phases/New_Moon.png",
+            "icons/moon phases/Waxing_Crescent.png",
+            "icons/moon phases/First_Quarter.png",
+            "icons/moon phases/Waxing_Gibbous.png",
+            "icons/moon phases/Full_Moon.png",
+            "icons/moon phases/Waning_Gibbous.png",
+            "icons/moon phases/Third_Quarter.png",
+            "icons/moon phases/Waning_Crescent.png",
+        };
+        for (int i = 0; i < 8; i++) {
+            if (!LoadIconFromPNG(moonPhaseFiles[i], moonPhaseIcons[i]))
+                std::cerr << "Failed to load moon phase icon: " << moonPhaseFiles[i] << "\n";
+        }
+    }
+
+    if (config.sunriseStyle != "default") {
+        // Build filename stem: "modern_wide" -> "Modern_wide" (only first char uppercased).
+        // File convention: <Stem>_Rise.png / <Stem>_Set.png under icons/sunrise/.
+        std::string sty = config.sunriseStyle;
+        sty[0] = std::toupper(sty[0]);
+        std::string riseFile = "icons/sunrise/" + sty + "_Rise.png";
+        std::string setFile  = "icons/sunrise/" + sty + "_Set.png";
+        ClearIcon(sunrisePngIcon);
+        ClearIcon(sunsetPngIcon);
+        if (!LoadIconFromPNG(riseFile, sunrisePngIcon))
+            std::cerr << "Failed to load sunrise icon: " << riseFile << "\n";
+        if (!LoadIconFromPNG(setFile, sunsetPngIcon))
+            std::cerr << "Failed to load sunset icon: " << setFile << "\n";
+        // Track icon width so DrawSunriseSunsetModule draws the correct column count.
+        sunrisePngIconW = (config.sunriseStyle == "modern_wide") ? 13 : 8;
+    }
+
     // Buffers
     rgb_matrix::FrameCanvas* offscreen = matrix->CreateFrameCanvas();
     rgb_matrix::FrameCanvas* staticFrame = matrix->CreateFrameCanvas();
@@ -1275,6 +1443,7 @@ int main(int argc, char* argv[]) {
     int fullRedrawNeeded = 2;
 
     bool currentIsNight = false;
+    bool currentIsIconNight = false;
     bool firstFrame = true;
 
     while (true) {
@@ -1297,13 +1466,27 @@ int main(int argc, char* argv[]) {
         std::string currentDateStr(date_str);
         bool dateChanged = (currentDayStr != lastDayStr || currentDateStr != lastDateStr);
 
-        // Night mode detection and brightness control
+        // Brightness night mode: controlled by config night_start/night_end
         bool isNight = IsNightTime(hour24, config.nightStart, config.nightEnd);
         if (isNight != currentIsNight || firstFrame) {
             currentIsNight = isNight;
             matrix->SetBrightness(isNight ? config.nightBrightness : config.dayBrightness);
             std::cerr << "Brightness: " << (isNight ? config.nightBrightness : config.dayBrightness)
                       << " (" << (isNight ? "night" : "day") << ")\n";
+        }
+
+        // Icon night mode: based on actual sunrise/sunset from forecast data
+        bool isIconNight = IsIconNight(hour24, minute,
+                                       meteoData.daily[0].sunriseMinutes,
+                                       meteoData.daily[0].sunsetMinutes);
+        if (isIconNight != currentIsIconNight) {
+            currentIsIconNight = isIconNight;
+            if (!config.clockOnly) {
+                UpdateStaticFrame(staticFrame, config, weatherData, meteoData,
+                                  day_str, date_str, tempFont, weatherColor, clockColor,
+                                  isIconNight, displayMode);
+                fullRedrawNeeded = 2;
+            }
         }
 
         // Update weather (skipped entirely in clock-only mode)
@@ -1336,6 +1519,13 @@ int main(int argc, char* argv[]) {
                     }
                     std::cerr << "Weather: " << weatherData.description
                               << " | Temp: " << weatherData.temp << std::endl;
+                    for (int i = 0; i < 3; i++) {
+                        const auto& d = meteoData.daily[i];
+                        std::cerr << "Forecast[" << i << "]: " << d.date
+                                  << " (" << d.dayLetter << ")"
+                                  << " wmo=" << d.weatherCode
+                                  << " hi=" << d.tempMax << " lo=" << d.tempMin << std::endl;
+                    }
                 } catch (...) {
                     std::cerr << "Failed to get data from Open-Meteo\n";
                     if (weatherData.temp.empty()) weatherFetchFailed = true;
@@ -1344,9 +1534,15 @@ int main(int argc, char* argv[]) {
                 // Always update timestamp to prevent retry-every-second
                 lastWeatherUpdate = now;
 
+                // Recompute isIconNight with fresh sunrise/sunset data
+                isIconNight = IsIconNight(hour24, minute,
+                                          meteoData.daily[0].sunriseMinutes,
+                                          meteoData.daily[0].sunsetMinutes);
+                currentIsIconNight = isIconNight;
+
                 UpdateStaticFrame(staticFrame, config, weatherData, meteoData,
                                   day_str, date_str, tempFont, weatherColor, clockColor,
-                                  isNight, displayMode);
+                                  isIconNight, displayMode);
                 fullRedrawNeeded = 2; // refresh both rotation canvases
             }
         }
