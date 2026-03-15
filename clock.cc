@@ -64,7 +64,7 @@ SegParams GetSegParams(ClockFont font, bool wideOrClock) {
     case ClockFont::Tall:
         return wideOrClock ? SegParams{ 9, 38, 2, 2} : SegParams{ 7, 20, 2, 1};
     case ClockFont::Retro:
-        return wideOrClock ? SegParams{18, 28, 4, 2} : SegParams{14, 19, 3, 1};
+        return wideOrClock ? SegParams{17, 28, 4, 2} : SegParams{14, 19, 3, 1};
     }
     return {10, 18, 2, 1};
 }
@@ -1381,17 +1381,15 @@ int main(int argc, char* argv[]) {
         const char* ampm = isPM ? "PM" : "AM";
         int ampmW = MeasureTextWidth(tempFont, ampm);
 
-        // Center based on max possible width (2-digit hour) so position never shifts.
-        // Single-digit hours draw offset by one digit-slot so colon/minutes stay fixed.
-        int maxDigitsW = Measure7SegTime(10, segW, segT, segGap);
-        int singleOffset = (hour12 < 10) ? segW + segGap : 0;
+        // Center based on actual displayed width for true centering.
+        int timeDigitsW = Measure7SegTime(hour12, segW, segT, segGap);
 
         if (config.clockOnly) {
             // Clock-only: large digits centered on full screen, AM/PM below
-            int timeX = std::max(0, (totalW - maxDigitsW) / 2);
+            int timeX = std::max(0, (totalW - timeDigitsW) / 2);
             int timeY = (totalH - segH - 14) / 2;
 
-            Draw7SegTime(offscreen, timeX + singleOffset, timeY, hour12, minute, second,
+            Draw7SegTime(offscreen, timeX, timeY, hour12, minute, second,
                          segW, segH, segT, segGap, clockColor);
 
             int ampmX = (totalW - ampmW) / 2;
@@ -1400,23 +1398,25 @@ int main(int argc, char* argv[]) {
 
         } else if (displayMode == DisplayMode::Standard) {
             // Time centered across full width, AM/PM to the right
-            int totalTimeW = maxDigitsW + 3 + ampmW;
+            int totalTimeW = timeDigitsW + 3 + ampmW;
             int timeX = std::max(0, (totalW - totalTimeW) / 2);
             int timeY = 1;
 
-            Draw7SegTime(offscreen, timeX + singleOffset, timeY, hour12, minute, second,
+            Draw7SegTime(offscreen, timeX, timeY, hour12, minute, second,
                          segW, segH, segT, segGap, clockColor);
 
-            // AM/PM aligned to bottom-right of digit block (fixed position regardless of hour width)
-            rgb_matrix::DrawText(offscreen, tempFont, timeX + maxDigitsW + 3, timeY + segH,
+            rgb_matrix::DrawText(offscreen, tempFont, timeX + timeDigitsW + 3, timeY + segH,
                                  clockColor, nullptr, ampm);
 
         } else if (displayMode == DisplayMode::WideHorizontal) {
             // Center in left 128px panel, AM/PM below
-            int timeX = std::max(0, (PANEL_WIDTH - maxDigitsW) / 2);
+            int timeX = std::max(0, (PANEL_WIDTH - timeDigitsW) / 2);
+            // Clamp so digits don't bleed into the second panel
+            if (timeX + timeDigitsW > PANEL_WIDTH)
+                timeX = PANEL_WIDTH - timeDigitsW;
             int timeY = (PANEL_HEIGHT - segH - 14) / 2;
 
-            Draw7SegTime(offscreen, timeX + singleOffset, timeY, hour12, minute, second,
+            Draw7SegTime(offscreen, timeX, timeY, hour12, minute, second,
                          segW, segH, segT, segGap, clockColor);
 
             int ampmX = (PANEL_WIDTH - ampmW) / 2;
@@ -1425,10 +1425,12 @@ int main(int argc, char* argv[]) {
 
         } else { // WideVertical
             // Center in top 128x64 panel, AM/PM below
-            int timeX = std::max(0, (PANEL_WIDTH - maxDigitsW) / 2);
+            int timeX = std::max(0, (PANEL_WIDTH - timeDigitsW) / 2);
+            if (timeX + timeDigitsW > PANEL_WIDTH)
+                timeX = PANEL_WIDTH - timeDigitsW;
             int timeY = (PANEL_HEIGHT - segH - 14) / 2;
 
-            Draw7SegTime(offscreen, timeX + singleOffset, timeY, hour12, minute, second,
+            Draw7SegTime(offscreen, timeX, timeY, hour12, minute, second,
                          segW, segH, segT, segGap, clockColor);
 
             int ampmX = (PANEL_WIDTH - ampmW) / 2;
